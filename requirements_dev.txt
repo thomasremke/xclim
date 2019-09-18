@@ -3,6 +3,7 @@ bumpversion
 wheel
 watchdog
 flake8
+mypy
 tox
 coverage
 twine
