@@ -8,6 +8,7 @@ import datetime as dt
 import functools
 import re
 import warnings
+from abc import ABC
 from collections import defaultdict
 from collections import OrderedDict
 from inspect import signature
@@ -937,7 +938,7 @@ class Indicator:
         checks.assert_daily(da)
 
 
-class Indicator2D(Indicator):
+class Indicator2D(Indicator, ABC):
     _nvar = 2
 
 
@@ -958,7 +959,7 @@ def parse_doc(doc):
             out["title"], out["abstract"] = content
 
     for i in range(0, len(sections), 2):
-        header, content = sections[i : i + 2]
+        header, content = sections[i: i + 2]
 
         if header in ["Notes", "References"]:
             out[header.lower()] = content.replace("\n    ", "\n")
