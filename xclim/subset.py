@@ -223,7 +223,7 @@ def assign_bounds(bounds, coord):
 def in_bounds(bounds, coord):
     """Check which coordinates are within the boundaries."""
     bn, bx = bounds
-    return coord >= bn & coord <= bx
+    return (coord >= bn) & (coord <= bx)
 
 
 @check_lons

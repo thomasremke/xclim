@@ -259,16 +259,12 @@ def _ens_align_datasets(datasets, mf_flag=False, time_flag=False, time_all=None)
                 ds = xr.open_dataset(n, decode_times=False, chunks={"time": 10})
 
         if time_flag:
-
-            ds["time"] = xr.decode_cf(ds).time
-
-            ds["time"].values = pd.to_datetime(
-                {
-                    "year": ds.time.dt.year,
-                    "month": ds.time.dt.month,
-                    "day": ds.time.dt.day,
-                }
+            t = xr.decode_cf(ds).time
+            o = pd.to_datetime(
+                {"year": t.dt.year, "month": t.dt.month, "day": t.dt.day}
             )
+            ds["time"] = xr.IndexVariable(dims=("time",), data=o)
+
             # if dataset does not have the same time steps pad with nans
             if ds.time.min() > time_all.min() or ds.time.max() < time_all.max():
                 coords = {}

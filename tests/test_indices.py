@@ -333,10 +333,6 @@ class TestGrowingDegreeDays:
         assert xci.growing_degree_days(da)[0] == 1
 
 
-@pytest.mark.skipif(
-    sys.version_info >= (3, 7),
-    reason="GrowingSeasonLength causes a dask-related SegFault",
-)
 class TestGrowingSeasonLength:
     def test_simple(self, tas_series):
         # test for different growing length
@@ -348,14 +344,14 @@ class TestGrowingSeasonLength:
         # 2000 : no growing season
 
         # 2001 : growing season all year
-        d1 = "27-12-2000"
-        d2 = "31-12-2001"
+        d1 = "2000-12-27"
+        d2 = "2001-12-31"
         buffer = tas.sel(time=slice(d1, d2))
         tas = tas.where(~tas.time.isin(buffer.time), 280)
 
         # 2002 : growing season in June only
-        d1 = "6-1-2002"
-        d2 = "6-10-2002"
+        d1 = "2002-06-01"
+        d2 = "2002-06-10"
         buffer = tas.sel(time=slice(d1, d2))
         tas = tas.where(~tas.time.isin(buffer.time), 280)
         #
@@ -365,14 +361,14 @@ class TestGrowingSeasonLength:
         # of growing season to be equal or later than July 1st.
 
         # growing season in Aug only
-        d1 = "8-1-2003"
-        d2 = "8-10-2003"
+        d1 = "2003-08-01"
+        d2 = "2003-08-10"
         buffer = tas.sel(time=slice(d1, d2))
         tas = tas.where(~tas.time.isin(buffer.time), 280)
 
         # growing season from June to end of July
-        d1 = "6-1-2004"
-        d2 = "7-31-2004"
+        d1 = "2004-6-1"
+        d2 = "2004-7-31"
         buffer = tas.sel(time=slice(d1, d2))
         tas = tas.where(~tas.time.isin(buffer.time), 280)
 
@@ -956,24 +952,3 @@ def cmip3_day_tas():
     )
     yield ds.tas
     ds.close()
-
-
-@pytest.fixture
-def response():
-    """Sample pytest fixture.
-
-    See more at: http://doc.pytest.org/en/latest/fixture.html
-    """
-    # import requests
-    # return requests.get('https://github.com/audreyr/cookiecutter-pypackage')
-
-
-@pytest.mark.skip
-def test_content(response):
-    """Sample pytest test function with the pytest fixture as an argument."""
-    # from bs4 import BeautifulSoup
-    # assert 'GitHub' in BeautifulSoup(response.content).title.string
-
-
-# x = Test_frost_days()
-# print('done')
