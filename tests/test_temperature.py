@@ -1154,3 +1154,10 @@ def test_freshet_start(tas_series):
         tas_series(np.arange(-50, 350) + 274, start="1/1/2000"), freq="YS"
     )
     assert out[0] == 51
+
+
+def test_deep_freezethaw_cycles(tas_series):
+    out = atmos.deep_frzthw_cycles(
+        tas_series(-np.sin(np.linspace(0, 2 * np.pi, 366)) + K2C, start="1/1/2000")
+    )
+    assert out[0] == 1

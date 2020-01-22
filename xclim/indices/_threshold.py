@@ -38,6 +38,7 @@ __all__ = [
     "sea_ice_area",
     "sea_ice_extent",
     "tropical_nights",
+    "deep_freezethaw_cycles",
 ]
 
 
@@ -836,14 +837,14 @@ def tropical_nights(
 @declare_units(
     "",
     tas="[temperature]",
-    thresh_freeze="C days",
-    thresh_thaw="C days",
+    thresh_freeze="K days",
+    thresh_thaw="K days",
     freezing_point="[temperature]",
 )
 def deep_freezethaw_cycles(
     tas: xarray.DataArray,
-    thresh_freeze: str = "-15 C days",
-    thresh_thaw: str = "15 C days",
+    thresh_freeze: str = "-15 K days",
+    thresh_thaw: str = "15 K days",
     freezing_point: str = "0 C",
     freq: str = "YS",
 ):
@@ -884,12 +885,61 @@ def deep_freezethaw_cycles(
     .. math::
         \sum_i T_i - T_f > thresh\_thaw
     """
-    thresh_freeze = utils.convert_units_to(thresh_freeze, "C days")
-    thresh_thaw = utils.convert_units_to(thresh_thaw, "C days")
-    freezing_point = utils.convert_units_to(freezing_point, "C")
-    tas = utils.convert_units_to(tas, "C")
+    thresh_freeze = utils.convert_units_to(thresh_freeze, "K days")
+    thresh_thaw = utils.convert_units_to(thresh_thaw, "K days")
+    freezing_point = utils.convert_units_to(freezing_point, tas)
+
+    if (thresh_thaw < 0) or (thresh_freeze > 0):
+        raise ValueError(
+            "Freeze and thaw thresholds should be below and above 0 K days, respectively."
+            " The thresholds should be given in K days directly as the degC days conversion is ambiguous."
+        )
+
+    def _deep_freezethaw_cycles(temp):
+        degdays = np.cumsum(temp - freezing_point)
+
+        # Find the places where the temperature crosses 0.
+        over = np.ones_like(degdays)
+        over[temp < freezing_point] = -1
+        cross = [0,] + np.nonzero(np.diff(over) != 0)[0].tolist()
+
+        cycles = [
+            0.1,  # Start with positive to assure a freeze as first event
+        ]
+        for ci in cross:
+            # If the next crossing occurs before the last event, skip it.
+            if ci != 0 and ci < np.abs(cycles[-1]):
+                continue
+
+            # Reset the cumulative sum from the crossing.
+            d = degdays[ci:] - degdays[max(ci - 1, 0)]
+
+            # Find the first place where t is exceeded (from above or below)
+            w = np.nonzero((d >= thresh_thaw) | (d <= thresh_freeze))[0]
+            if len(w) > 0:
+                w = w[0]  # <-- This is where it occurs.
+                s = np.sign(d[w])  # <-- This indicates if its thawing or freezing.
+
+                # Test for the alternance of freeze and thaw events.
+                # Store only an event if its different from the last.
+                if s != np.sign(cycles[-1]):
+                    cycles.append(s * (w + ci))
+
+        # Remove the artificial cycle starting at 0.
+        cycles.pop(0)
+
+        # Return the number of full cycles
+        n = len(cycles) // 2
+        return n
 
     def _compute_deep_freezethaw_cycles(group):
-        pass
+        return xarray.apply_ufunc(
+            _deep_freezethaw_cycles,
+            group,
+            input_core_dims=[("time",)],
+            output_dtypes=[int],
+            vectorize=True,
+            dask="parallelized",
+        )
 
-    return
+    return tas.resample(time=freq).map(_compute_deep_freezethaw_cycles)

@@ -74,6 +74,9 @@ units.define(
 units.define("d = day")
 units.define("h = hour")
 
+units.define("[degree-days] = [temperature] * [time]")
+
+units.define("C days = K days = [degree-days]")
 # Default context.
 null = pint.Context("none")
 units.add_context(null)

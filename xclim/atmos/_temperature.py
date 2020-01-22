@@ -42,6 +42,7 @@ __all__ = [
     "consecutive_frost_days",
     "growing_season_length",
     "tropical_nights",
+    "deep_frzthw_cycles",
 ]
 
 
@@ -506,4 +507,17 @@ tn10p = Tasmin(
     "for a reference period.",
     cell_methods="time: minimum within days time: sum over days",
     compute=indices.tn10p,
+)
+
+
+deep_frzthw_cycles = Tas(
+    identifier="deepfrzthw",
+    units="",
+    standard_name="deep_freezethaw_cycles",
+    long_name="deep freeze-thaw cycles",
+    description="{freq} number of deep freeze-thaw events. A freeze/thaw event occurs when the daily mean"
+    " temperature cumulates {thresh_freeze}/{thresh_thaw}. A freeze-thaw cycle is a freeze event followed by"
+    " a thaw event. Degree-days are computed with respect to {freezing_point} and starting when the temperature crosses {freezing_point}.",
+    cell_methods="time: sum over days",
+    compute=indices.deep_freezethaw_cycles,
 )

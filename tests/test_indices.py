@@ -983,6 +983,33 @@ class TestTG:
         pass
 
 
+class TestDeepFreezeThawCycles:
+    @pytest.mark.parametrize(
+        "values,expected",
+        [
+            ([0, 1, 2, 3, 0, -1, 0, 1, -2, -3, 3], 1),
+            ([0, 1, 2, 3, 4], 0),
+            ([3, 4, 5, 2, 3, -3, 4, 5, -5, -6, -3, 0, -1, 4, 5, 2, -3, -5], 2),
+        ],
+    )
+    def test_simple(self, tas_series, values, expected):
+        tas = tas_series(np.array(values) + K2C)
+        np.testing.assert_equal(
+            xci.deep_freezethaw_cycles(
+                tas, thresh_thaw="1 K days", thresh_freeze="-1 K days"
+            ),
+            [expected],
+        )
+
+    @pytest.mark.parametrize(
+        "thaw,freeze", [("1 K days", "1 K days"), ("-1 K days", "-1 K days")]
+    )
+    def test_params(self, tas_series, thaw, freeze):
+        tas = tas_series([280, 280, 280])
+        with pytest.raises(ValueError):
+            xci.deep_freezethaw_cycles(tas, thresh_freeze=freeze, thresh_thaw=thaw)
+
+
 @pytest.fixture(scope="session")
 def cmip3_day_tas():
     # xr.set_options(enable_cftimeindex=False)
