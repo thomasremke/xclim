@@ -1,7 +1,8 @@
-import numpy as np
-import xarray
 import datetime
 from typing import Union
+
+import numpy as np
+import xarray
 
 from xclim import run_length as rl
 from xclim import utils
@@ -830,3 +831,65 @@ def tropical_nights(
     return (
         tasmin.pipe(lambda x: (tasmin > thresh) * 1).resample(time=freq).sum(dim="time")
     )
+
+
+@declare_units(
+    "",
+    tas="[temperature]",
+    thresh_freeze="C days",
+    thresh_thaw="C days",
+    freezing_point="[temperature]",
+)
+def deep_freezethaw_cycles(
+    tas: xarray.DataArray,
+    thresh_freeze: str = "-15 C days",
+    thresh_thaw: str = "15 C days",
+    freezing_point: str = "0 C",
+    freq: str = "YS",
+):
+    r"""Number of deep freeze-thaw cycles
+
+    The number of times where the integrated daily mean temperature goes
+    over a threshold after a period where it was below another threshold.
+    The cumulative sum resets when the temperature goes below the freezing point.
+
+    Parameters
+    ----------
+    tas : xarray.DataArray
+      Mean daily temperature [°C] or [K]
+    thresh_freeze : str
+      Threshold under which a deep freezing event starts [°C days] or [K days]. Default: '-15 C days'.
+    thresh_thaw : str
+      Threshold over which a deep thaw event starts [°C days] or [K days]. Default: '15 C days'.
+    freezing_point : str
+      Degree-days are computed in reference to the freezing point and are reset they go below the freezing point after a thaw event. Default: '0 C'.
+    freq : str
+      Resampling frequency. Default: "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Number of deep freeze-thaw cycles.
+
+    Notes
+    -----
+    Let :math:`T_i` be the daily mean temperature at day :math:`i` where it goes below the freezing point :math:`T_f`.
+    The next deep freezing event starts at day :math:`j` where:
+
+    .. math::
+        \sum_i^j T_i - T_f < thresh\_freeze
+
+    Then, a deep freeze-thaw cycle completes when:
+
+    .. math::
+        \sum_i T_i - T_f > thresh\_thaw
+    """
+    thresh_freeze = utils.convert_units_to(thresh_freeze, "C days")
+    thresh_thaw = utils.convert_units_to(thresh_thaw, "C days")
+    freezing_point = utils.convert_units_to(freezing_point, "C")
+    tas = utils.convert_units_to(tas, "C")
+
+    def _compute_deep_freezethaw_cycles(group):
+        pass
+
+    return
