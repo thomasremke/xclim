@@ -933,9 +933,10 @@ def deep_freezethaw_cycles(
         return n
 
     def _compute_deep_freezethaw_cycles(group):
+        year_data = group.chunk({'time': -1})
         return xarray.apply_ufunc(
             _deep_freezethaw_cycles,
-            group,
+            year_data,
             input_core_dims=[("time",)],
             output_dtypes=[int],
             vectorize=True,
