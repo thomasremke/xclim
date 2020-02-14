@@ -12,6 +12,7 @@ from typing import Sequence
 from typing import Union
 
 import numpy as np
+import xarray as xr
 from boltons.funcutils import wraps
 
 import xclim
@@ -19,48 +20,46 @@ from xclim import checks
 from xclim.locales import get_local_attrs
 from xclim.locales import get_local_formatter
 from xclim.locales import LOCALES
+from xclim.units import convert_units_to
+from xclim.units import units
 from xclim.utils import AttrFormatter
-from xclim.utils import convert_units_to
 from xclim.utils import default_formatter
 from xclim.utils import parse_doc
-from xclim.utils import units
 
 
-# This class needs to be subclassed by individual indicator classes defining metadata information, compute and
-# missing functions. It can handle indicators with any number of forcing fields.
 class Indicator:
-    r"""Climate indicator based on xarray
-    """
-    # Unique ID for function registry.
-    identifier = ""
+    """Climate indicator
 
-    # Output variable name. May use tags {<tag>} that will be formatted at runtime.
-    var_name = ""
+    Performs the computation on a climatic indice with data completeness checks and unit conversion.
+    Regroups all metadata needed to understand the indice, assigns CF attributes to the output indice.
+
+    This class needs to be subclassed by individual indicator classes defining metadata information, compute and
+    missing functions. It can handle indicators with any number of forcing fields.
+
+    Attributes whose doc is preceded by `[CF]` are added to the output DataArray. Those with [Parsed] are
+    tentativelly filled at compile-time from the docstring of the underlying indice function.
+    """
+
+    identifier = ""  #: Unique ID for function registry. Should the same as the name of the instance.
+    var_name = ""  #: Output variable name. May use tags {<tag>} that will be formatted at runtime.
 
     _nvar = 1
 
-    # CF-Convention metadata to be attributed to the output variable. May use tags {<tag>} formatted at runtime.
-    # The set of permissible standard names is contained in the standard name table.
-    standard_name = ""
-    long_name = ""  # Parsed.
-    units = ""  # Representative units of the physical quantity.
-    cell_methods = ""  # List of blank-separated words of the form "name: method"
-    description = ""  # The description is meant to clarify the qualifiers of the fundamental quantities, such as which
-    #   surface a quantity is defined on or what the flux sign conventions are.
+    # CF-Convention metadata to be attributed to the output variable.
+    standard_name = ""  #: [CF] Standard name of the indice. The set of permissible standard names is contained in the standard name table.
+    long_name = ""  #: [CF] Long descriptive name of the indice. May use tags {<tag>} formatted at runtime.
+    units = ""  #: [CF] Representative units of the physical quantity.
+    cell_methods = ""  #: [CF] List of blank-separated words of the form "name: method" May use tags {<tag>} formatted at runtime but not recommended.
+    description = ""  #: [CF] The description is meant to clarify the qualifiers of the fundamental quantities, such as which surface a quantity is defined on or what the flux sign conventions are.
 
-    # The `pint` unit context. Use 'hydro' to allow conversion from kg m-2 s-1 to mm/day.
-    context = "none"
+    context = "none"  #: The `pint` unit context. Use 'hydro' to allow conversion from kg m-2 s-1 to mm/day.
 
-    # Additional information that can be used by third party libraries or to describe the file content.
-    title = ""  # A succinct description of what is in the dataset. Default parsed from compute.__doc__
-    abstract = ""  # Parsed
-    keywords = ""  # Comma separated list of keywords
-    # Published or web-based references that describe the data or methods used to produce it. Parsed.
-    references = ""
-    comment = (
-        ""  # Miscellaneous information about the data or methods used to produce it.
-    )
-    notes = ""  # Mathematical formulation. Parsed.
+    title = ""  #: [Parsed] A one-line description of what is in the dataset, similar to `long_name` but without formatting.
+    abstract = ""  #: [Parsed] A description of the indice and its computation, similar to `description` but without formatting.
+    keywords = ""  #: Comma separated list of keywords
+    references = ""  #: [CF] [Parsed] Published or web-based references that describe the data or methods used to produce it.
+    comment = ""  #: [CF] [Parsed] Miscellaneous information about the data or methods used to produce it.
+    notes = ""  #: [Parsed] Mathematical formulation or other important information excluded from the abstract.
 
     # Allowed metadata attributes on the output
     _cf_names = [
@@ -73,14 +72,11 @@ class Indicator:
         "references",
     ]
 
-    # metadata fields that are formatted as free text.
+    # metadata fields that are formatted as free text (stripped and capitalized after formatting)
     _text_fields = ["long_name", "description", "comment"]
 
-    # Whether or not the compute function is a partial.
-    _partial = False
-
     # Can be used to override the compute docstring.
-    doc_template = None
+    # doc_template = None
 
     def __init__(self, **kwds):
 
@@ -102,39 +98,41 @@ class Indicator:
 
         # Extract information from the `compute` function.
         # The signature
-        self._sig = signature(self.compute)
+        self._sig = signature(self.compute, follow_wrapped=False)
 
         # The input parameter names
-        self._parameters = tuple(self._sig.parameters.keys())
-        #        self._input_params = [p for p in self._sig.parameters.values() if p.default is p.empty]
-        #        self._nvar = len(self._input_params)
+        self._parameters = {
+            k: {"default": v.default, "annotation": v.annotation}
+            for k, v in self._sig.parameters.items()
+        }
 
         # Copy the docstring and signature
+        self._partial = getattr(self.compute, "_partial", False)
         self.__call__ = wraps(self.compute)(self.__call__.__func__)
-        if self.doc_template is not None:
-            self.__call__.__doc__ = self.doc_template.format(i=self)
 
         # Fill in missing metadata from the doc
         meta = parse_doc(self.compute.__doc__)
         for key in ["abstract", "title", "notes", "references"]:
             setattr(self, key, getattr(self, key) or meta.get(key, ""))
+        for param in self._parameters.keys():
+            if param in meta.get("parameters", {}):
+                self._parameters[param]["doc"] = meta["parameters"][param]
 
     def __call__(self, *args, **kwds):
         # Bind call arguments. We need to use the class signature, not the instance, otherwise it removes the first
         # argument.
-        if self._partial:
-            ba = self._sig.bind_partial(*args, **kwds)
-            for key, val in self.compute.keywords.items():
-                if key not in ba.arguments:
-                    ba.arguments[key] = val
-        else:
-            ba = self._sig.bind(*args, **kwds)
-            ba.apply_defaults()
+        # if self._partial:
+        #     ba = self._sig.bind_partial(*args, **kwds)
+        #     for key, val in self.compute.keywords.items():
+        #         if key not in ba.arguments:
+        #             ba.arguments[key] = val
+        # else:
+        ba = self._sig.bind(*args, **kwds)
+        ba.apply_defaults()
 
         # Get history and cell method attributes from source data
         attrs = defaultdict(str)
-        for i in range(self._nvar):
-            p = self._parameters[i]
+        for i, p in zip(range(self._nvar), self._sig.parameters.keys()):
             for attr in ["history", "cell_methods"]:
                 attrs[attr] += f"{p}: " if self._nvar > 1 else ""
                 attrs[attr] += getattr(ba.arguments[p], attr, "")
@@ -180,15 +178,18 @@ class Indicator:
         attrs.update(out_attrs)
 
         # Assume the first arguments are always the DataArray.
-        das = tuple(ba.arguments.pop(self._parameters[i]) for i in range(self._nvar))
+        das = {
+            p: ba.arguments.pop(p)
+            for i, p in zip(range(self._nvar), self._sig.parameters.keys())
+        }
 
         # Pre-computation validation checks
-        for da in das:
+        for da in das.values():
             self.validate(da)
-        self.cfprobe(*das)
+        self.cfprobe(*das.values())
 
         # Compute the indicator values, ignoring NaNs.
-        out = self.compute(*das, **ba.kwargs)
+        out = self.compute(**das, **ba.kwargs)
 
         # Convert to output units
         out = convert_units_to(out, self.units, self.context)
@@ -197,10 +198,10 @@ class Indicator:
         out.attrs.update(attrs)
 
         # Bind call arguments to the `missing` function, whose signature might be different from `compute`.
-        mba = signature(self.missing).bind(*das, **ba.arguments)
+        mba = signature(self.missing).bind(**das, **ba.arguments)
 
         # Mask results that do not meet criteria defined by the `missing` method.
-        mask = self.missing(*mba.args, **mba.kwargs)
+        mask = self.missing(**mba.kwargs)
         ma_out = out.where(~mask)
 
         return ma_out.rename(vname)
@@ -316,17 +317,21 @@ class Indicator:
         return out
 
     @staticmethod
-    def missing(*args, **kwds):
+    def missing(**kwds):
         """Return whether an output is considered missing or not."""
         from functools import reduce
 
         freq = kwds.get("freq")
         if freq is not None:
             # We flag any period with missing data
-            miss = (checks.missing_any(da, freq) for da in args)
+            miss = (
+                checks.missing_any(da, freq)
+                for da in kwds.values()
+                if isinstance(da, xr.DataArray)
+            )
         else:
             # There is no resampling, we flag where one of the input is missing
-            miss = (da.isnull() for da in args)
+            miss = (da.isnull() for da in kwds.values() if isinstance(da, xr.DataArray))
         return reduce(np.logical_or, miss)
 
     def validate(self, da):

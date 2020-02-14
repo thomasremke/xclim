@@ -1,12 +1,14 @@
+import datetime
+
 import numpy as np
 import xarray
-import datetime
-from typing import Union
 
 from xclim import run_length as rl
 from xclim import utils
-from xclim.utils import declare_units
-from xclim.utils import units
+from xclim.units import convert_units_to
+from xclim.units import declare_units
+from xclim.units import pint_multiply
+from xclim.units import units
 
 xarray.set_options(enable_cftimeindex=True)  # Set xarray to use cftimeindex
 
@@ -75,7 +77,7 @@ def cold_spell_days(tas, thresh="-10 degC", window: int = 5, freq="AS-JUL"):
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false.
 
     """
-    t = utils.convert_units_to(thresh, tas)
+    t = convert_units_to(thresh, tas)
     over = tas < t
     group = over.resample(time=freq)
 
@@ -125,7 +127,7 @@ def daily_pr_intensity(pr, thresh="1 mm/day", freq="YS"):
     >>> pr = xr.open_dataset("pr_day.nc").pr
     >>> daily_int = xclim.indices.daily_pr_intensity(pr, thresh='5 mm/day', freq="QS-DEC")
     """
-    t = utils.convert_units_to(thresh, pr, "hydro")
+    t = convert_units_to(thresh, pr, "hydro")
 
     # put pr=0 for non wet-days
     pr_wd = xarray.where(pr >= t, pr, 0)
@@ -133,7 +135,7 @@ def daily_pr_intensity(pr, thresh="1 mm/day", freq="YS"):
 
     # sum over wanted period
     s = pr_wd.resample(time=freq).sum(dim="time", keep_attrs=True)
-    sd = utils.pint_multiply(s, 1 * units.day, "mm")
+    sd = pint_multiply(s, 1 * units.day, "mm")
 
     # get number of wetdays over period
     wd = wetdays(pr, thresh=thresh, freq=freq)
@@ -177,7 +179,7 @@ def maximum_consecutive_wet_days(
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    thresh = utils.convert_units_to(thresh, pr, "hydro")
+    thresh = convert_units_to(thresh, pr, "hydro")
 
     group = (pr > thresh).resample(time=freq)
     return group.apply(rl.longest_run, dim="time")
@@ -216,7 +218,7 @@ def cooling_degree_days(
 
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false.
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
 
     return (
         tas.pipe(lambda x: x - thresh).clip(min=0).resample(time=freq).sum(dim="time")
@@ -261,7 +263,7 @@ def freshet_start(
     is true, where :math:`w` is the number of days the temperature threshold should be exceeded,  and :math:`[P]` is
     1 if :math:`P` is true, and 0 if false.
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
     over = tas > thresh
     group = over.resample(time=freq)
     return group.apply(rl.first_run_ufunc, window=window, index="dayofyear")
@@ -298,7 +300,7 @@ def growing_degree_days(
 
         GD4_j = \sum_{i=1}^I (TG_{ij}-{4} | TG_{ij} > {4}℃)
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
     return (
         tas.pipe(lambda x: x - thresh).clip(min=0).resample(time=freq).sum(dim="time")
     )
@@ -360,7 +362,7 @@ def growing_season_length(
     If working in the Southern Hemisphere, one can use:
     >>> gsl = growing_season_length(tas, mid_date='01-01', freq='AS-Jul')
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
 
     mid_doy = datetime.datetime.strptime(mid_date, "%m-%d").timetuple().tm_yday
 
@@ -423,7 +425,7 @@ def heat_wave_index(
     DataArray
       Heat wave index.
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     over = tasmax > thresh
     group = over.resample(time=freq)
 
@@ -461,7 +463,7 @@ def heating_degree_days(
 
         HD17_j = \sum_{i=1}^{I} (17℃ - TG_{ij})
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
 
     return tas.pipe(lambda x: thresh - x).clip(0).resample(time=freq).sum(dim="time")
 
@@ -497,7 +499,7 @@ def tn_days_below(
 
         TX_{ij} < Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
+    thresh = convert_units_to(thresh, tasmin)
     f1 = utils.threshold_count(tasmin, "<", thresh, freq)
     return f1
 
@@ -533,7 +535,7 @@ def tx_days_above(
 
         TX_{ij} > Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     f = (tasmax > thresh) * 1
     return f.resample(time=freq).sum(dim="time")
 
@@ -569,7 +571,7 @@ def warm_day_frequency(
         TN_{ij} > Threshold [℃]
 
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     events = (tasmax > thresh) * 1
     return events.resample(time=freq).sum(dim="time")
 
@@ -596,7 +598,7 @@ def warm_night_frequency(
     xarray.DataArray
       The number of days with tasmin > thresh per period
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
+    thresh = convert_units_to(thresh, tasmin)
     events = (tasmin > thresh) * 1
     return events.resample(time=freq).sum(dim="time")
 
@@ -632,7 +634,7 @@ def wetdays(pr: xarray.DataArray, thresh: str = "1.0 mm/day", freq: str = "YS"):
     >>> pr = xr.open_dataset('pr.day.nc').pr
     >>> wd = xclim.indices.wetdays(pr, pr_min=5., freq="QS-DEC")
     """
-    thresh = utils.convert_units_to(thresh, pr, "hydro")
+    thresh = convert_units_to(thresh, pr, "hydro")
 
     wd = (pr >= thresh) * 1
     return wd.resample(time=freq).sum(dim="time")
@@ -675,7 +677,7 @@ def maximum_consecutive_dry_days(
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    t = utils.convert_units_to(thresh, pr, "hydro")
+    t = convert_units_to(thresh, pr, "hydro")
     group = (pr < t).resample(time=freq)
 
     return group.apply(rl.longest_run, dim="time")
@@ -717,7 +719,7 @@ def maximum_consecutive_tx_days(
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    t = utils.convert_units_to(thresh, tasmax)
+    t = convert_units_to(thresh, tasmax)
     group = (tasmax > t).resample(time=freq)
 
     return group.apply(rl.longest_run, dim="time")
@@ -753,8 +755,8 @@ def sea_ice_area(sic, area, thresh="15 pct"):
     <https://nsidc.org/arcticseaicenews/faq/#area_extent>`_
 
     """
-    t = utils.convert_units_to(thresh, sic)
-    factor = utils.convert_units_to("100 pct", sic)
+    t = convert_units_to(thresh, sic)
+    factor = convert_units_to("100 pct", sic)
     out = xarray.dot(sic.where(sic >= t, 0), area) / factor
     out.attrs["units"] = area.units
     return out
@@ -789,7 +791,7 @@ def sea_ice_extent(sic, area, thresh="15 pct"):
     `What is the difference between sea ice area and extent
     <https://nsidc.org/arcticseaicenews/faq/#area_extent>`_
     """
-    t = utils.convert_units_to(thresh, sic)
+    t = convert_units_to(thresh, sic)
     out = xarray.dot(sic >= t, area)
     out.attrs["units"] = area.units
     return out
@@ -826,7 +828,7 @@ def tropical_nights(
 
         TN_{ij} > Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
+    thresh = convert_units_to(thresh, tasmin)
     return (
         tasmin.pipe(lambda x: (tasmin > thresh) * 1).resample(time=freq).sum(dim="time")
     )

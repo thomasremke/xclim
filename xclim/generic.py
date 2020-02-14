@@ -36,7 +36,7 @@ def select_time(da: xr.DataArray, **indexer):
     return selected
 
 
-def select_resample_op(da: xr.DataArray, op, freq: str = "YS", **indexer):
+def select_resample_op(*, da: xr.DataArray, op, freq: str = "YS", **indexer):
     """Apply operation over each period that is part of the index selection.
 
     Parameters

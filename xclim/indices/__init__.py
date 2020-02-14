@@ -14,7 +14,7 @@ attribute of the output DataArray.
 
     Indices functions do not perform missing value checks, and do not set CF-Convention attributes
     (long_name, standard_name, description, cell_methods, etc). These functionalities are provided by
-    :class:`xclim.utils.Indicator` instances found in the :mod:`xclim.atmos`, :mod:`xclim.land` and
+    :class:`xclim.indicator.Indicator` instances found in the :mod:`xclim.atmos`, :mod:`xclim.land` and
     :mod:`xclim.seaIce` modules.
 
 """
