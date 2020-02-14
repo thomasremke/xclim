@@ -715,7 +715,8 @@ def wrapped_partial(func, suggest: dict = None, **prescribe):
     for param in map(sign.parameters.get, kwargs.keys()):
         if param.kind != param.KEYWORD_ONLY:
             raise TypeError(
-                f"wrapped_partial works only with KEYWORD_ONLY arguments but arg '{param.name}' of {func} is {param.kind!s}."
+                "wrapped_partial works only with KEYWORD_ONLY arguments "
+                f"but arg '{param.name}' of {func} is {param.kind!s}."
             )
 
     injected = list(prescribe.keys()) + list(suggest.keys())
