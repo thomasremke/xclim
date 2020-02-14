@@ -49,7 +49,7 @@ class Indicator:
     standard_name = ""  #: [CF] Standard name of the indice. The set of permissible standard names is contained in the standard name table.
     long_name = ""  #: [CF] Long descriptive name of the indice. May use tags {<tag>} formatted at runtime.
     units = ""  #: [CF] Representative units of the physical quantity.
-    cell_methods = ""  #: [CF] List of blank-separated words of the form "name: method" May use tags {<tag>} formatted at runtime but not recommended.
+    cell_methods = ""  #: [CF] List of blank-separated words of the form 'name : method' May use tags {<tag>} formatted at runtime but not recommended.
     description = ""  #: [CF] The description is meant to clarify the qualifiers of the fundamental quantities, such as which surface a quantity is defined on or what the flux sign conventions are.
 
     context = "none"  #: The `pint` unit context. Use 'hydro' to allow conversion from kg m-2 s-1 to mm/day.

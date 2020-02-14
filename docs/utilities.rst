@@ -26,6 +26,15 @@ Subsetting
    :show-inheritance:
    :noindex:
 
+Indicator base
+--------------
+
+.. automodule:: xclim.indicator
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :noindex:
+
 Run-Length Calculations
 -----------------------
 
@@ -43,4 +52,3 @@ Other Utilities
    :undoc-members:
    :show-inheritance:
    :noindex:
-

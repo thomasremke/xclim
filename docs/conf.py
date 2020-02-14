@@ -32,11 +32,11 @@ def _get_indicators(module):
     modules : sequence
       Sequence of modules to inspect.
     """
-    import xclim.utils as xcu
+    import xclim.indicator as xcind
 
     out = []
     for key, val in module.__dict__.items():
-        if isinstance(val, (xcu.Indicator, xcu.Indicator2D)):
+        if isinstance(val, (xcind.Indicator, xcind.Indicator2D)):
             out.append(val)
 
     return out
