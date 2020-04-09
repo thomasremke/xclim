@@ -1,19 +1,20 @@
-import copy
 import logging
 import warnings
 from functools import wraps
 from pathlib import Path
 from typing import Optional
+from typing import Sequence
 from typing import Tuple
 from typing import Union
 
-import fiona.crs as fiocrs
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray
 from pyproj import Geod
+from pyproj.crs import CRS
 from shapely.geometry import LineString
+from shapely.geometry import MultiPolygon
 from shapely.geometry import Point
 from shapely.geometry import Polygon
 from shapely.ops import cascaded_union
@@ -214,11 +215,47 @@ def check_latlon_dimnames(func):
     return func_checker
 
 
+def convert_lat_lon_to_da(func):
+    @wraps(func)
+    def func_checker(*args, **kwargs):
+        """
+        A decorator to transform input lat, lon to DataArrays.
+
+        Input can be int, float or any iterable.
+        Expects a DataArray as first argument and checks is dim "site" already exists,
+        uses "_site" in that case.
+
+        If the input are not already DataArrays, the new lon and lat objects are 1D DataArrays
+        with dimension "site".
+        """
+        lat = kwargs.pop("lat", None)
+        lon = kwargs.pop("lon", None)
+        if not isinstance(lat, (type(None), xarray.DataArray)) or not isinstance(
+            lon, (type(None), xarray.DataArray)
+        ):
+            try:
+                if len(lat) != len(lon):
+                    raise ValueError("'lat' and 'lon' must have the same length")
+            except TypeError:  # They have no len : not iterables
+                lat = [lat]
+                lon = [lon]
+            ptdim = xarray.core.utils.get_temp_dimname(args[0].dims, "site")
+            if ptdim != "site" and len(lat) > 1:
+                warnings.warn(
+                    f"Dimension 'site' already on input, output will use {ptdim} instead."
+                )
+            lon = xarray.DataArray(lon, dims=(ptdim,))
+            lat = xarray.DataArray(lat, dims=(ptdim,))
+        return func(*args, lat=lat, lon=lon, **kwargs)
+
+    return func_checker
+
+
 def wrap_lons_and_split_at_greenwich(func):
     @wraps(func)
     def func_checker(*args, **kwargs):
         """
-        A decorator to split and reproject polygon vectors in a GeoDataFram whose values cross the Greenwich Meridian.
+        A decorator to split and reproject polygon vectors in a GeoDataFrame whose values cross the Greenwich Meridian.
          Begins by examining whether the geometry bounds the supplied cross longitude = 0 and if so, proceeds to split
          the polygons at the meridian into new polygons and erase a small buffer to prevent invalid geometries when
          transforming the lons from WGS84 to WGS84 +lon_wrap=180 (longitudes from 0 to 360).
@@ -243,7 +280,7 @@ def wrap_lons_and_split_at_greenwich(func):
                     stacklevel=4,
                 )
             split_flag = False
-            for (index, feature) in poly.iterrows():
+            for index, feature in poly.iterrows():
                 if (feature.geometry.bounds[0] < 0) and (
                     feature.geometry.bounds[2] > 0
                 ):
@@ -256,31 +293,31 @@ def wrap_lons_and_split_at_greenwich(func):
                     )
 
                     # Create a meridian line at Greenwich, split polygons at this line and erase a buffer line
-                    union = Polygon(cascaded_union(feature.geometry))
+                    if isinstance(feature.geometry, MultiPolygon):
+                        union = MultiPolygon(cascaded_union(feature.geometry))
+                    else:
+                        union = Polygon(cascaded_union(feature.geometry))
                     meridian = LineString([Point(0, 90), Point(0, -90)])
                     buffered = meridian.buffer(0.000000001)
                     split_polygons = split(union, meridian)
-                    # TODO: This doesn't seem to be thread safe in Travis CI on macOS. Merits testing with a local machine.
                     buffered_split_polygons = [
-                        feat for feat in split_polygons.difference(buffered)
+                        feat.difference(buffered) for feat in split_polygons
                     ]
 
                     # Cannot assign iterable with `at` (pydata/pandas#26333) so a small hack:
                     # Load split features into a new GeoDataFrame with WGS84 CRS
                     split_gdf = gpd.GeoDataFrame(
                         geometry=[cascaded_union(buffered_split_polygons)],
-                        crs={"epsg:4326"},
+                        crs=CRS("epsg:4326"),
                     )
                     poly.at[[index], "geometry"] = split_gdf.geometry.values
-                    # split_gdf.columns = ["index", "geometry"]
-
-                    # feature = split_gdf
 
             # Reproject features in WGS84 CSR to use 0 to 360 as longitudinal values
-            poly = poly.to_crs(
+            wrapped_lons = CRS(
                 "+proj=longlat +ellps=WGS84 +lon_wrap=180 +datum=WGS84 +no_defs"
             )
-            crs1 = poly.crs
+
+            poly = poly.to_crs(crs=wrapped_lons)
             if split_flag:
                 warnings.warn(
                     "Rebuffering split polygons to ensure edge inclusion in selection",
@@ -288,7 +325,7 @@ def wrap_lons_and_split_at_greenwich(func):
                     stacklevel=4,
                 )
                 poly = gpd.GeoDataFrame(poly.buffer(0.000000001), columns=["geometry"])
-                poly.crs = crs1
+                poly.crs = wrapped_lons
 
             kwargs["poly"] = poly
 
@@ -340,12 +377,15 @@ def create_mask(
     >>> region_names = xr.DataArray(polys.id, dims=('regions',)))
     >>> ds = ds.assign_coords(regions_names=region_names)
     """
+    wgs84 = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+    # poly.crs = wgs84
+
     # Check for intersections
     for i, (inda, pola) in enumerate(poly.iterrows()):
-        for (indb, polb) in poly.loc[i + 1 :].iterrows():
+        for (indb, polb) in poly.iloc[i + 1 :].iterrows():
             if pola.geometry.intersects(polb.geometry):
                 warnings.warn(
-                    f"List of shapes contains overlap between {inda} and {indb}. Only {inda} will be used.",
+                    f"List of shapes contains overlap between {inda} and {indb}. Points will be assigned to {inda}.",
                     UserWarning,
                     stacklevel=4,
                 )
@@ -374,14 +414,10 @@ def create_mask(
 
     # create geodataframe (spatially referenced with shifted longitude values if needed).
     if wrap_lons:
-        shifted = fiocrs.from_string(
-            "+proj=longlat +ellps=WGS84 +lon_wrap=180 +datum=WGS84 +no_defs"
+        wgs84 = CRS.from_string(
+            "+proj=longlat +datum=WGS84 +no_defs +type=crs +lon_wrap=180"
         )
-        gdf_points = gpd.GeoDataFrame(df, geometry="Coordinates", crs=shifted)
-    else:
-        gdf_points = gpd.GeoDataFrame(
-            df, geometry="Coordinates", crs=fiocrs.from_epsg(4326)
-        )
+    gdf_points = gpd.GeoDataFrame(df, geometry="Coordinates", crs=wgs84)
 
     # spatial join geodata points with region polygons and remove duplicates
     point_in_poly = gpd.tools.sjoin(gdf_points, poly, how="left", op="intersects")
@@ -397,7 +433,7 @@ def create_mask(
 @check_latlon_dimnames
 def subset_shape(
     ds: Union[xarray.DataArray, xarray.Dataset],
-    shape: Union[str, Path],
+    shape: Union[str, Path, gpd.GeoDataFrame],
     raster_crs: Optional[Union[str, int]] = None,
     shape_crs: Optional[Union[str, int]] = None,
     buffer: Optional[Union[int, float]] = None,
@@ -414,8 +450,8 @@ def subset_shape(
     ----------
     ds : Union[xarray.DataArray, xarray.Dataset]
       Input values.
-    shape : Union[str, Path]
-      Path to shape file. Supports formats compatible with geopandas.
+    shape : Union[str, Path, gpd.GeoDataFrame]
+      Path to shape file, or directly a geodataframe. Supports formats compatible with geopandas.
     raster_crs : Optional[Union[str, int]]
       EPSG number or PROJ4 string.
     shape_crs : Optional[Union[str, int]]
@@ -435,7 +471,8 @@ def subset_shape(
 
     Returns
     -------
-    Tuple[Union[xarray.DataArray, xarray.Dataset], xarray.DataArray]
+    Union[xarray.DataArray, xarray.Dataset]
+        A subsetted copy of  `ds`
 
     Examples
     --------
@@ -455,9 +492,17 @@ def subset_shape(
     >>> prSub = \
             subset.subset_shape(ds.pr, shape="/path/to/polygon.shp", start_date='1990-03-13', end_date='1990-08-17')
     """
-    # TODO : edge case using polygon splitting decorator touches original ds when subsetting?
-    ds_copy = copy.deepcopy(ds)
-    poly = gpd.GeoDataFrame.from_file(shape)
+    wgs84 = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+    if isinstance(ds, xarray.DataArray):
+        ds_copy = ds._to_temp_dataset()
+    else:
+        ds_copy = ds.copy()
+
+    if isinstance(shape, gpd.GeoDataFrame):
+        poly = shape.copy()
+    else:
+        poly = gpd.GeoDataFrame.from_file(shape)
 
     if buffer is not None:
         poly.geometry = poly.buffer(buffer)
@@ -476,7 +521,7 @@ def subset_shape(
 
     if ds_copy.lon.size == 0 or ds_copy.lat.size == 0:
         raise ValueError(
-            "No gridcell centroids found within provided polygon bounding box. "
+            "No grid cell centroids found within provided polygon bounding box. "
             'Try using the "buffer" option to create an expanded area'
         )
 
@@ -486,73 +531,77 @@ def subset_shape(
     # Determine whether CRS types are the same between shape and raster
     if shape_crs is not None:
         try:
-            shape_crs = fiocrs.from_epsg(shape_crs)
+            shape_crs = CRS.from_string(shape_crs)
         except ValueError:
-            try:
-                shape_crs = fiocrs.from_string(shape_crs)
-            except ValueError:
-                raise
+            raise
     else:
-        shape_crs = poly.crs
+        shape_crs = CRS(poly.crs)
 
     if raster_crs is not None:
         try:
-            raster_crs = fiocrs.from_epsg(raster_crs)
+            raster_crs = CRS(raster_crs)
         except ValueError:
-            try:
-                raster_crs = fiocrs.from_string(raster_crs)
-            except ValueError:
-                raise
+            raise
     else:
         if np.min(ds_copy.lon) >= 0 and np.max(ds_copy.lon) <= 360:
-            # PROJ4 definition for WGS84 with Prime Meridian at -180 deg lon.
-            raster_crs = fiocrs.from_string(
-                "+proj=longlat +ellps=WGS84 +lon_wrap=180 +datum=WGS84 +no_defs"
-            )
+            # PROJ4 definition for  with Prime Meridian at -180 deg lon.
+            wgs84 = CRS("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs lon_wrap=180")
             wrap_lons = True
         else:
-            raster_crs = fiocrs.from_epsg(4326)
             wrap_lons = False
+        raster_crs = wgs84
 
-    if (shape_crs != raster_crs) or (
-        fiocrs.from_epsg(4326) not in [shape_crs, raster_crs]
-    ):
-        warnings.warn(
-            "CRS definitions are not similar or both not using WGS84. Caveat emptor.",
-            UserWarning,
-            stacklevel=3,
-        )
+    if shape_crs != raster_crs:
+        if (
+            "lon_wrap" in raster_crs.to_proj4()
+            and "lon_wrap" not in shape_crs.to_proj4()
+        ):
+            warnings.warn(
+                "CRS definitions are similar but raster lon values must be wrapped.",
+                UserWarning,
+                stacklevel=3,
+            )
+        elif (CRS.from_epsg(4326) != shape_crs) and (
+            CRS(4326).to_proj4() != raster_crs
+        ):
+            warnings.warn(
+                "CRS definitions are not similar or both not using WGS84 datum. Tread with caution.",
+                UserWarning,
+                stacklevel=3,
+            )
 
     mask_2d = create_mask(
         x_dim=ds_copy.lon, y_dim=ds_copy.lat, poly=poly, wrap_lons=wrap_lons
     )
 
-    if np.all(np.isnan(mask_2d)):
+    if np.all(mask_2d.isnull()):
         raise ValueError(
-            "No gridcell centroids found within provided polygon. "
-            'Try using the "buffer" option to create an expanded areas or verify polygon '
+            f"No grid cell centroids found within provided polygon bounds ({poly.bounds}). "
+            'Try using the "buffer" option to create an expanded areas or verify polygon.'
         )
 
     # loop through variables
     for v in ds_copy.data_vars:
         if set.issubset(set(mask_2d.dims), set(ds_copy[v].dims)):
-            ds_copy[v] = ds_copy[v].where((~np.isnan(mask_2d)), drop=True)
+            ds_copy[v] = ds_copy[v].where(mask_2d.notnull())
 
     # Remove coordinates where all values are outside of region mask
-    if "lon" in ds_copy.dims:
-        ds_copy = ds_copy.dropna(dim="lon", how="all")
-        ds_copy = ds_copy.dropna(dim="lat", how="all")
-    else:  # curvilinear case
-        for d in ds_copy.lon.dims:
-            ds_copy = ds_copy.dropna(dim=d, how="all")
+    for dim in mask_2d.dims:
+        mask_2d = mask_2d.dropna(dim, how="all")
+    ds_copy = ds_copy.sel({dim: mask_2d[dim] for dim in mask_2d.dims})
 
-    # Add a CRS definition as a coordinate for reference purposes
+    # Add a CRS definition using CF conventions and as a global attribute WKT for reference purposes
     if wrap_lons:
-        ds_copy.coords["crs"] = 0
-        ds_copy.coords["crs"].attrs = dict(
-            spatial_ref="+proj=longlat +ellps=WGS84 +lon_wrap=180 +datum=WGS84 +no_defs"
-        )
+        ds_copy.attrs["crs"] = wgs84.to_string()
+        ds_copy["crs"] = 1
+        ds_copy["crs"].attrs.update(wgs84.to_cf())
 
+        for v in ds_copy.variables:
+            if {"lat", "lon"}.issubset(set(ds_copy[v].dims)):
+                ds_copy[v].attrs["grid_mapping"] = "crs"
+
+    if isinstance(ds, xarray.DataArray):
+        return ds._from_temp_dataset(ds_copy)
     return ds_copy
 
 
@@ -663,7 +712,9 @@ def subset_bbox(
         args = {}
         for i, d in enumerate(da.lat.dims):
             coords = da[d][ind[i]]
-            args[d] = slice(coords.min(), coords.max())
+            args[d] = slice(coords.min().values, coords.max().values)
+        # If the dims of lat and lon do not have coords, sel defaults to isel,
+        # and then the last element is not returned.
         da = da.sel(**args)
 
         # Recompute condition on cropped coordinates
@@ -738,29 +789,32 @@ def _check_desc_coords(coord, bounds, dim):
 
 @check_latlon_dimnames
 @check_lons
+@convert_lat_lon_to_da
 @check_date_signature
 def subset_gridpoint(
     da: Union[xarray.DataArray, xarray.Dataset],
-    lon: Optional[float] = None,
-    lat: Optional[float] = None,
+    lon: Optional[Union[float, Sequence[float], xarray.DataArray]] = None,
+    lat: Optional[Union[float, Sequence[float], xarray.DataArray]] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     tolerance: Optional[float] = None,
+    add_distance: bool = False,
 ) -> Union[xarray.DataArray, xarray.Dataset]:
-    """Extract a nearest gridpoint from datarray based on lat lon coordinate.
+    """Extract one or more nearest gridpoint(s) from datarray based on lat lon coordinate(s).
 
-    Return a subsetted data array (or Dataset) for the grid point falling nearest the input longitude and latitude
+    Return a subsetted data array (or Dataset) for the grid point(s) falling nearest the input longitude and latitude
     coordinates. Optionally subset the data array for years falling within provided date bounds.
     Time series can optionally be subsetted by dates.
+    If 1D sequences of coordinates are given, the gridpoints will be concatenated along the new dimension "site".
 
     Parameters
     ----------
     da : Union[xarray.DataArray, xarray.Dataset]
       Input data.
-    lon : Optional[float]
-      Longitude coordinate.
-    lat : Optional[float]
-      Latitude coordinate.
+    lon : Optional[Union[float, Sequence[float], xarray.DataArray]]
+      Longitude coordinate(s). Must be of the same length as lat.
+    lat : Optional[Union[float, Sequence[float], xarray.DataArray]]
+      Latitude coordinate(s). Must be of the same length as lon.
     start_date : Optional[str]
       Start date of the subset.
       Date string format -- can be year ("%Y"), year-month ("%Y-%m") or year-month-day("%Y-%m-%d").
@@ -769,14 +823,9 @@ def subset_gridpoint(
       End date of the subset.
       Date string format -- can be year ("%Y"), year-month ("%Y-%m") or year-month-day("%Y-%m-%d").
       Defaults to last day of input data-array.
-    start_yr : int
-      Deprecated
-        First year of the subset. Defaults to first year of input data-array.
-    end_yr : int
-      Deprecated
-        Last year of the subset. Defaults to last year of input data-array.
     tolerance : Optional[float]
-      Raise error if the distance to the nearest gridpoint is larger than tolerance in meters.
+      Masks values if the distance to the nearest gridpoint is larger than tolerance in meters.
+
 
     Returns
     -------
@@ -802,6 +851,8 @@ def subset_gridpoint(
 
     # check if trying to subset lon and lat
     if lat is not None and lon is not None:
+        ptdim = lat.dims[0]
+
         # make sure input data has 'lon' and 'lat'(dims, coordinates, or data_vars)
         if hasattr(da, "lon") and hasattr(da, "lat"):
             dims = list(da.dims)
@@ -810,23 +861,27 @@ def subset_gridpoint(
             if "lat" in dims and "lon" in dims:
                 da = da.sel(lat=lat, lon=lon, method="nearest")
 
-                if tolerance is not None:
+                if tolerance is not None or add_distance:
                     # Calculate the geodesic distance between grid points and the point of interest.
-                    dist = distance(da, lon, lat)
+                    dist = distance(da, lon=lon, lat=lat)
 
             else:
                 # Calculate the geodesic distance between grid points and the point of interest.
-                dist = distance(da, lon, lat)
+                dist = distance(da, lon=lon, lat=lat)
+                pts = []
+                dists = []
+                for site in dist[ptdim]:
+                    # Find the indices for the closest point
+                    inds = np.unravel_index(
+                        dist.sel({ptdim: site}).argmin(), dist.sel({ptdim: site}).shape
+                    )
 
-                # Find the indices for the closest point
-                iy, ix = np.unravel_index(dist.argmin(), dist.shape)
-
-                # Select data from closest point
-                xydims = [x for x in dist.dims]
-                args = dict()
-                args[xydims[0]] = iy
-                args[xydims[1]] = ix
-                da = da.isel(**args)
+                    # Select data from closest point
+                    args = {xydim: ind for xydim, ind in zip(dist.dims, inds)}
+                    pts.append(da.isel(**args))
+                    dists.append(dist.isel(**args))
+                da = xarray.concat(pts, dim=ptdim)
+                dist = xarray.concat(dists, dim=ptdim)
         else:
             raise (
                 Exception(
@@ -834,11 +889,14 @@ def subset_gridpoint(
                 )
             )
 
-    if tolerance is not None:
-        if dist.min() > tolerance:
-            raise ValueError(
-                f"Distance to closest point ({dist}) is larger than tolerance ({tolerance})"
-            )
+        if tolerance is not None:
+            da = da.where(dist < tolerance)
+
+        if add_distance:
+            da = da.assign_coords(distance=dist)
+
+        if len(lat) == 1:
+            da = da.squeeze(ptdim)
 
     if start_date or end_date:
         da = subset_time(da, start_date=start_date, end_date=end_date)
@@ -898,16 +956,17 @@ def subset_time(
     return da.sel(time=slice(start_date, end_date))
 
 
-def distance(da, lon, lat):
+@convert_lat_lon_to_da
+def distance(da, *, lon, lat):
     """Return distance to point in meters.
 
     Parameters
     ----------
     da : Union[xarray.DataArray, xarray.Dataset]
       Input data.
-    lon : Optional[float]
+    lon : Union[float, Sequence[float], xarray.DataArray]
       Longitude coordinate.
-    lat : Optional[float]
+    lat : Union[float, Sequence[float], xarray.DataArray]
       Latitude coordinate.
 
     Returns
@@ -922,16 +981,22 @@ def distance(da, lon, lat):
     >>> import xarray as xr
     >>> import xclim.subset
     >>> da = xr.open_dataset("/path/to/file.nc").variable
-    >>> d = xclim.subset.distance(da)
+    >>> d = xclim.subset.distance(da, lon=lon, lat=lat)
     >>> k = d.argmin()
     >>> i, j = np.unravel_index(k, d.shape)
-
     """
+    ptdim = lat.dims[0]
+
     g = Geod(ellps="WGS84")  # WGS84 ellipsoid - decent globaly
 
-    def func(lons, lats):
-        return g.inv(*np.broadcast_arrays(lons, lats, lon, lat))[2]
+    def func(lons, lats, lon, lat):
+        return g.inv(lons, lats, lon, lat)[2]
 
-    out = xarray.apply_ufunc(func, da.lon, da.lat)
+    out = xarray.apply_ufunc(
+        func,
+        *xarray.broadcast(da.lon.load(), da.lat.load(), lon, lat),
+        input_core_dims=[[ptdim]] * 4,
+        output_core_dims=[[ptdim]],
+    )
     out.attrs["units"] = "m"
     return out
