@@ -504,6 +504,50 @@ def last_spring_frost(
     )
 
 
+@declare_units("", tas="[temperature]", thresh="[temperature]")
+def first_day_below(
+    tas: xarray.DataArray,
+    thresh: str = "0 degC",
+    after_date: str = "07-01",
+    window: int = 1,
+    freq: str = "YS",
+):
+    r"""First day of temperatures inferior to a threshold temperature.
+
+    Returns first day of period where a temperature is inferior to a threshold
+    over a given number of days, limited to a starting calendar date.
+
+    Parameters
+    ----------
+    tas : xarray.DataArray
+      Mean daily temperature [℃] or [K].
+    thresh : str
+      Threshold temperature on which to base evaluation [℃] or [K]. Default '0 degC'.
+    after_date : str
+      Date of the year after which to look for the first frost event. Should have the format '%m-%d'.
+    window : int
+      Minimum number of days with temperature below threshold needed for evaluation.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Day of the year when temperature is inferior to a threshold over a given number of days for the first time.
+      If there is no such day, return np.nan.
+    """
+    thresh = convert_units_to(thresh, tas)
+    cond = tas > thresh
+
+    return cond.resample(time=freq).map(
+        rl.run_end_after_date,
+        window=window,
+        date=after_date,
+        dim="time",
+        coord="dayofyear",
+    )
+
+
 @declare_units("days", tasmax="[temperature]", thresh="[temperature]")
 def heat_wave_index(
     tasmax: xarray.DataArray,

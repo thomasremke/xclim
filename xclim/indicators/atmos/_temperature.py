@@ -423,6 +423,16 @@ last_spring_frost = Tasmin(
     compute=indices.last_spring_frost,
 )
 
+
+first_day_below = Tasmin(
+    identifier="first_day_below",
+    units="",
+    standard_name="day_of_year",
+    long_name="First day of year with temperature below {thresh}",
+    description="First day of year with temperature below {thresh} for at least {window} days.",
+    compute=indices.first_day_below,
+)
+
 ice_days = Tasmax(
     identifier="ice_days",
     standard_name="days_with_air_temperature_below_threshold",
