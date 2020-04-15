@@ -1,13 +1,15 @@
 import datetime
-from typing import Union
 
 import numpy as np
 import xarray
 
-from xclim import run_length as rl
-from xclim import utils
-from xclim.utils import declare_units
-from xclim.utils import units
+from xclim.core.units import convert_units_to
+from xclim.core.units import declare_units
+from xclim.core.units import pint_multiply
+from xclim.core.units import units
+from xclim.indices import run_length as rl
+from xclim.indices.generic import threshold_count
+
 
 xarray.set_options(enable_cftimeindex=True)  # Set xarray to use cftimeindex
 
@@ -21,20 +23,26 @@ xarray.set_options(enable_cftimeindex=True)  # Set xarray to use cftimeindex
 __all__ = [
     "cold_spell_days",
     "daily_pr_intensity",
-    "maximum_consecutive_wet_days",
     "cooling_degree_days",
     "freshet_start",
     "growing_degree_days",
+    "growing_season_end",
     "growing_season_length",
+    "last_spring_frost",
     "heat_wave_index",
     "heating_degree_days",
+    "hot_spell_frequency",
+    "hot_spell_max_length",
     "tn_days_below",
     "tx_days_above",
     "warm_day_frequency",
     "warm_night_frequency",
     "wetdays",
+    "dry_days",
     "maximum_consecutive_dry_days",
+    "maximum_consecutive_frost_free_days",
     "maximum_consecutive_tx_days",
+    "maximum_consecutive_wet_days",
     "sea_ice_area",
     "sea_ice_extent",
     "tropical_nights",
@@ -43,7 +51,9 @@ __all__ = [
 
 
 @declare_units("days", tas="[temperature]", thresh="[temperature]")
-def cold_spell_days(tas, thresh="-10 degC", window: int = 5, freq="AS-JUL"):
+def cold_spell_days(
+    tas, thresh: str = "-10 degC", window: int = 5, freq: str = "AS-JUL"
+):
     r"""Cold spell days
 
     The number of days that are part of a cold spell, defined as five or more consecutive days with mean daily
@@ -51,7 +61,7 @@ def cold_spell_days(tas, thresh="-10 degC", window: int = 5, freq="AS-JUL"):
 
     Parameters
     ----------
-    tas : xarrray.DataArray
+    tas : xarray.DataArray
       Mean daily temperature [℃] or [K]
     thresh : str
       Threshold temperature below which a cold spell begins [℃] or [K]. Default: '-10 degC'
@@ -77,15 +87,15 @@ def cold_spell_days(tas, thresh="-10 degC", window: int = 5, freq="AS-JUL"):
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false.
 
     """
-    t = utils.convert_units_to(thresh, tas)
+    t = convert_units_to(thresh, tas)
     over = tas < t
     group = over.resample(time=freq)
 
-    return group.apply(rl.windowed_run_count, window=window, dim="time")
+    return group.map(rl.windowed_run_count, window=window, dim="time")
 
 
 @declare_units("mm/day", pr="[precipitation]", thresh="[precipitation]")
-def daily_pr_intensity(pr, thresh="1 mm/day", freq="YS"):
+def daily_pr_intensity(pr, thresh: str = "1 mm/day", freq: str = "YS"):
     r"""Average daily precipitation intensity
 
     Return the average precipitation over wet days.
@@ -127,7 +137,7 @@ def daily_pr_intensity(pr, thresh="1 mm/day", freq="YS"):
     >>> pr = xr.open_dataset("pr_day.nc").pr
     >>> daily_int = xclim.indices.daily_pr_intensity(pr, thresh='5 mm/day', freq="QS-DEC")
     """
-    t = utils.convert_units_to(thresh, pr, "hydro")
+    t = convert_units_to(thresh, pr, "hydro")
 
     # put pr=0 for non wet-days
     pr_wd = xarray.where(pr >= t, pr, 0)
@@ -135,11 +145,44 @@ def daily_pr_intensity(pr, thresh="1 mm/day", freq="YS"):
 
     # sum over wanted period
     s = pr_wd.resample(time=freq).sum(dim="time", keep_attrs=True)
-    sd = utils.pint_multiply(s, 1 * units.day, "mm")
+    sd = pint_multiply(s, 1 * units.day, "mm")
 
     # get number of wetdays over period
     wd = wetdays(pr, thresh=thresh, freq=freq)
     return sd / wd
+
+
+@declare_units("days", pr="[precipitation]", thresh="[precipitation]")
+def dry_days(pr: xarray.DataArray, thresh: str = "0.2 mm/d", freq: str = "YS"):
+    r"""Dry days
+
+    The number of days with daily precipitation below threshold.
+
+    Parameters
+    ----------
+    pr : xarray.DataArray
+      Daily precipitation [mm/d or kg/m²/s]
+    thresh : str
+      Threshold temperature on which to base evaluation. Default: '0.2 mm/d'.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Number of days with daily precipitation below threshold.
+
+    Notes
+    -----
+    Let :math:`PR_{ij}` be the daily precipitation at day :math:`i` of period :math:`j`. Then
+    counted is the number of days where:
+
+    .. math::
+
+        \sum PR_{ij} < Threshold [mm/day]
+    """
+    thresh = convert_units_to(thresh, pr)
+    return pr.pipe(lambda x: (pr < thresh) * 1).resample(time=freq).sum(dim="time")
 
 
 @declare_units("days", pr="[precipitation]", thresh="[precipitation]")
@@ -174,15 +217,15 @@ def maximum_consecutive_wet_days(
     .. math::
 
 
-       \max(\mathbf{d}) \quad \mathrm{where} \quad d_j = (s_j - s_{j-1}) [x_{s_j} > 0\celsius]
+       \max(\mathbf{d}) \quad \mathrm{where} \quad d_j = (s_j - s_{j-1}) [x_{s_j} > 0^\circ C]
 
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    thresh = utils.convert_units_to(thresh, pr, "hydro")
+    thresh = convert_units_to(thresh, pr, "hydro")
 
     group = (pr > thresh).resample(time=freq)
-    return group.apply(rl.longest_run, dim="time")
+    return group.map(rl.longest_run, dim="time")
 
 
 @declare_units("C days", tas="[temperature]", thresh="[temperature]")
@@ -218,7 +261,7 @@ def cooling_degree_days(
 
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false.
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
 
     return (
         tas.pipe(lambda x: x - thresh).clip(min=0).resample(time=freq).sum(dim="time")
@@ -227,7 +270,7 @@ def cooling_degree_days(
 
 @declare_units("", tas="[temperature]", thresh="[temperature]")
 def freshet_start(
-    tas: xarray.DataArray, thresh: str = "0 degC", window: int = 5, freq: int = "YS"
+    tas: xarray.DataArray, thresh: str = "0 degC", window: int = 5, freq: str = "YS"
 ):
     r"""First day consistently exceeding threshold temperature.
 
@@ -237,18 +280,18 @@ def freshet_start(
     Parameters
     ----------
     tas : xarray.DataArray
-      Mean daily temperature [℃] or [K]
+      Mean daily temperature [℃] or [K].
     thresh : str
-      Threshold temperature on which to base evaluation [℃] or [K]. Default '0 degC'
+      Threshold temperature on which to base evaluation [℃] or [K]. Default '0 degC'.
     window : int
-      Minimum number of days with temperature above threshold needed for evaluation
+      Minimum number of days with temperature above threshold needed for evaluation.
     freq : str
       Resampling frequency; Defaults to "YS".
 
     Returns
     -------
-    float
-      Day of the year when temperature exceeds threshold over a given number of days for the first time. If there are
+    xarray.DataArray
+      Day of the year when temperature exceeds threshold over a given number of days for the first time. If there is
       no such day, return np.nan.
 
     Notes
@@ -260,13 +303,14 @@ def freshet_start(
 
        \prod_{j=i}^{i+w} [x_j > thresh]
 
-    is true, where :math:`w` is the number of days the temperature threshold should be exceeded,  and :math:`[P]` is
+    is true, where :math:`w` is the number of days the temperature threshold should be exceeded, and :math:`[P]` is
     1 if :math:`P` is true, and 0 if false.
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
     over = tas > thresh
-    group = over.resample(time=freq)
-    return group.apply(rl.first_run_ufunc, window=window, index="dayofyear")
+    return over.resample(time=freq).map(
+        rl.first_run, dim="time", window=window, coord="dayofyear"
+    )
 
 
 @declare_units("C days", tas="[temperature]", thresh="[temperature]")
@@ -280,16 +324,16 @@ def growing_degree_days(
     Parameters
     ---------
     tas : xarray.DataArray
-      Mean daily temperature [℃] or [K]
+      Mean daily temperature [℃] or [K].
     thresh : str
       Threshold temperature on which to base evaluation [℃] or [K]. Default: '4.0 degC'.
     freq : str
-      Resampling frequency; Defaults to "YS".
+      Resampling frequency. Default: "YS".
 
     Returns
     -------
     xarray.DataArray
-      The sum of growing degree-days above 4℃
+      The sum of growing degree-days above a given threshold.
 
     Notes
     -----
@@ -300,9 +344,54 @@ def growing_degree_days(
 
         GD4_j = \sum_{i=1}^I (TG_{ij}-{4} | TG_{ij} > {4}℃)
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
     return (
         tas.pipe(lambda x: x - thresh).clip(min=0).resample(time=freq).sum(dim="time")
+    )
+
+
+@declare_units("", tas="[temperature]", thresh="[temperature]")
+def growing_season_end(
+    tas: xarray.DataArray,
+    thresh: str = "5.0 degC",
+    mid_date: str = "07-01",
+    window: int = 5,
+    freq: str = "YS",
+):
+    r"""Day of the year of the start of a sequence of days with a temperature consistently below a threshold, after a period with temperatures consistently above the same threshold.
+
+    Returns the first day of period where a temperature is inferior to a threshold
+    over a given run of days.
+
+    Parameters
+    ----------
+    tas : xarray.DataArray
+      Mean daily temperature [℃] or [K].
+    thresh : str
+      Threshold temperature on which to base evaluation [℃] or [K]. Default '5.0 degC'.
+    mid_date : str
+      Date of the year after which to look for the end of the season. Should have the format '%m-%d'.
+    window : int
+      Minimum number of days with temperature below threshold needed for evaluation.
+    freq : str
+      Resampling frequency. Default: "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Day of the year when temperature is inferior to a threshold over a given number of days for the first time.
+      If there is no such day or if a growing season is not detected, returns np.nan.
+      If the growing season does not end within the time period, returns the last day of the period.
+    """
+    thresh = convert_units_to(thresh, tas)
+    cond = tas >= thresh
+
+    return cond.resample(time=freq).map(
+        rl.run_end_after_date,
+        window=window,
+        date=mid_date,
+        dim="time",
+        coord="dayofyear",
     )
 
 
@@ -317,17 +406,17 @@ def growing_season_length(
     r"""Growing season length.
 
     The number of days between the first occurrence of at least
-    six consecutive days with mean daily temperature over 5℃ and
-    the first occurrence of at least six consecutive days with
-    mean daily temperature below 5℃ after a certain date. (Usually
-    July 1st in the northern hemisphere and January 1st in the southern hemisphere.)
+    six consecutive days with mean daily temperature over a threshold (default: 5℃) and
+    the first occurrence of at least six consecutive days with mean daily temperature
+    below the same threshold after a certain date. (Usually July 1st in the northern
+    hemisphere and January 1st in the southern hemisphere.)
 
-    WARNING: The default values are only valid for the northern hemisphere.
+    WARNING: The default calendar values are only valid for the northern hemisphere.
 
     Parameters
     ---------
     tas : xarray.DataArray
-      Mean daily temperature [℃] or [K]
+      Mean daily temperature [℃] or [K].
     thresh : str
       Threshold temperature on which to base evaluation [℃] or [K]. Default: '5.0 degC'.
     window : int
@@ -335,7 +424,7 @@ def growing_season_length(
     mid_date : str
       Date of the year after which to look for the end of the season. Should have the format '%m-%d'.
     freq : str
-      Resampling frequency; Defaults to "YS".
+      Resampling frequency. Default: "YS".
 
     Returns
     -------
@@ -360,49 +449,110 @@ def growing_season_length(
     Examples
     --------
     If working in the Southern Hemisphere, one can use:
+
     >>> gsl = growing_season_length(tas, mid_date='01-01', freq='AS-Jul')
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
+    cond = tas >= thresh
 
-    mid_doy = datetime.datetime.strptime(mid_date, "%m-%d").timetuple().tm_yday
+    return cond.resample(time=freq).map(
+        rl.run_length_with_date, window=window, date=mid_date, dim="time",
+    )
 
-    def compute_gsl(yrdata):
-        if (
-            yrdata.chunks is not None
-            and len(yrdata.chunks[yrdata.dims.index("time")]) > 1
-        ):
-            yrdata = yrdata.chunk({"time": -1})
-        mid_idx = np.where(yrdata.time.dt.dayofyear == mid_doy)[0]
-        if (
-            mid_idx.size == 0
-        ):  # The mid date is not in the group. Happens at boundaries.
-            allNans = xarray.full_like(yrdata.isel(time=0), np.nan)
-            allNans.attrs = {}
-            return allNans
-        end = rl.first_run(
-            yrdata.where(yrdata.time >= yrdata.time[mid_idx][0]) < thresh,
-            window,
-            "time",
-        )
-        beg = rl.first_run(yrdata > thresh, window, "time")
-        sl = end - beg
-        sl = xarray.where(
-            beg.isnull() & end.notnull(), 0, sl
-        )  # If everything is under thresh
-        sl = xarray.where(
-            beg.notnull() & end.isnull(), yrdata.time.size - beg, sl
-        )  # If gs is not ended at end of year
-        return sl.where(sl >= 0)  # When end happens before beg.
 
-    gsl = tas.resample(time=freq).map(compute_gsl)
-    return gsl
+@declare_units("", tas="[temperature]", thresh="[temperature]")
+def last_spring_frost(
+    tas: xarray.DataArray,
+    thresh: str = "0 degC",
+    before_date: str = "07-01",
+    window: int = 1,
+    freq: str = "YS",
+):
+    r"""Last day of temperatures inferior to a threshold temperature.
+
+    Returns last day of period where a temperature is inferior to a threshold
+    over a given number of days and limited to a final calendar date.
+
+    Parameters
+    ----------
+    tas : xarray.DataArray
+      Mean daily temperature [℃] or [K].
+    thresh : str
+      Threshold temperature on which to base evaluation [℃] or [K]. Default '0 degC'.
+    before_date : str
+      Date of the year before which to look for the final frost event. Should have the format '%m-%d'.
+    window : int
+      Minimum number of days with temperature below threshold needed for evaluation.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Day of the year when temperature is inferior to a threshold over a given number of days for the first time.
+      If there is no such day, return np.nan.
+    """
+    thresh = convert_units_to(thresh, tas)
+    cond = tas < thresh
+
+    return cond.resample(time=freq).map(
+        rl.last_run_before_date,
+        window=window,
+        date=before_date,
+        dim="time",
+        coord="dayofyear",
+    )
+
+
+@declare_units("", tas="[temperature]", thresh="[temperature]")
+def first_day_below(
+    tas: xarray.DataArray,
+    thresh: str = "0 degC",
+    after_date: str = "07-01",
+    window: int = 1,
+    freq: str = "YS",
+):
+    r"""First day of temperatures inferior to a threshold temperature.
+
+    Returns first day of period where a temperature is inferior to a threshold
+    over a given number of days, limited to a starting calendar date.
+
+    Parameters
+    ----------
+    tas : xarray.DataArray
+      Mean daily temperature [℃] or [K].
+    thresh : str
+      Threshold temperature on which to base evaluation [℃] or [K]. Default '0 degC'.
+    after_date : str
+      Date of the year after which to look for the first frost event. Should have the format '%m-%d'.
+    window : int
+      Minimum number of days with temperature below threshold needed for evaluation.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Day of the year when temperature is inferior to a threshold over a given number of days for the first time.
+      If there is no such day, return np.nan.
+    """
+    thresh = convert_units_to(thresh, tas)
+    cond = tas > thresh
+
+    return cond.resample(time=freq).map(
+        rl.run_end_after_date,
+        window=window,
+        date=after_date,
+        dim="time",
+        coord="dayofyear",
+    )
 
 
 @declare_units("days", tasmax="[temperature]", thresh="[temperature]")
 def heat_wave_index(
     tasmax: xarray.DataArray,
     thresh: str = "25.0 degC",
-    window: str = 5,
+    window: int = 5,
     freq: str = "YS",
 ):
     r"""Heat wave index.
@@ -411,7 +561,7 @@ def heat_wave_index(
 
     Parameters
     ----------
-    tasmax : xarrray.DataArray
+    tasmax : xarray.DataArray
       Maximum daily temperature [℃] or [K]
     thresh : str
       Threshold temperature on which to designate a heatwave [℃] or [K]. Default: '25.0 degC'.
@@ -425,11 +575,11 @@ def heat_wave_index(
     DataArray
       Heat wave index.
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     over = tasmax > thresh
     group = over.resample(time=freq)
 
-    return group.apply(rl.windowed_run_count, window=window, dim="time")
+    return group.map(rl.windowed_run_count, window=window, dim="time")
 
 
 @declare_units("C days", tas="[temperature]", thresh="[temperature]")
@@ -463,16 +613,133 @@ def heating_degree_days(
 
         HD17_j = \sum_{i=1}^{I} (17℃ - TG_{ij})
     """
-    thresh = utils.convert_units_to(thresh, tas)
+    thresh = convert_units_to(thresh, tas)
 
     return tas.pipe(lambda x: thresh - x).clip(0).resample(time=freq).sum(dim="time")
+
+
+@declare_units(
+    "days", tasmax="[temperature]", thresh_tasmax="[temperature]",
+)
+def hot_spell_max_length(
+    tasmax: xarray.DataArray,
+    thresh_tasmax: str = "30 degC",
+    window: int = 1,
+    freq: str = "YS",
+) -> xarray.DataArray:
+    # Dev note : we should decide if it is deg K or C
+    r"""Longest hot spell
+
+    Longest spell of high temperatures over a given period.
+
+    The longest series of consecutive days with tasmax ≥ 30 °C. Here, there is no minimum threshold for number of
+    days in a row that must be reached or exceeded to count as a spell. A year with zero +30 °C days will return a
+    longest spell value of zero.
+
+    Parameters
+    ----------
+    tasmax : xarray.DataArray
+      Maximum daily temperature [℃] or [K]
+    thresh_tasmax : str
+      The maximum temperature threshold needed to trigger a heatwave event [℃] or [K]. Default : '30 degC'
+    window : int
+      Minimum number of days with temperatures above thresholds to qualify as a heatwave.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Maximum length of continuous hot days at the wanted frequency
+
+    Notes
+    -----
+    The thresholds of 22° and 25°C for night temperatures and 30° and 35°C for day temperatures were selected by
+    Health Canada professionals, following a temperature–mortality analysis. These absolute temperature thresholds
+    characterize the occurrence of hot weather events that can result in adverse health outcomes for Canadian
+    communities (Casati et al., 2013).
+
+    In Robinson (2001), the parameters would be `thresh_tasmin=27.22, thresh_tasmax=39.44, window=2` (81F, 103F).
+
+    References
+    ----------
+    Casati, B., A. Yagouti, and D. Chaumont, 2013: Regional Climate Projections of Extreme Heat Events in Nine Pilot
+    Canadian Communities for Public Health Planning. J. Appl. Meteor. Climatol., 52, 2669–2698,
+    https://doi.org/10.1175/JAMC-D-12-0341.1
+
+    Robinson, P.J., 2001: On the Definition of a Heat Wave. J. Appl. Meteor., 40, 762–775,
+    https://doi.org/10.1175/1520-0450(2001)040<0762:OTDOAH>2.0.CO;2
+    """
+    thresh_tasmax = convert_units_to(thresh_tasmax, tasmax)
+
+    cond = tasmax > thresh_tasmax
+    group = cond.resample(time=freq)
+    max_l = group.map(rl.longest_run, dim="time")
+    return max_l.where(max_l >= window, 0)
+
+
+@declare_units(
+    "", tasmax="[temperature]", thresh_tasmax="[temperature]",
+)
+def hot_spell_frequency(
+    tasmax: xarray.DataArray,
+    thresh_tasmax: str = "30 degC",
+    window: int = 3,
+    freq: str = "YS",
+) -> xarray.DataArray:
+    # Dev note : we should decide if it is deg K or C
+    r"""Hot spell frequency
+
+    Number of hot spells over a given period. A hot spell is defined as an event
+    where the maximum daily temperature exceeds a specific threshold
+    over a minimum number of days.
+
+    Parameters
+    ----------
+    tasmax : xarray.DataArray
+      Maximum daily temperature [℃] or [K]
+    thresh_tasmax : str
+      The maximum temperature threshold needed to trigger a heatwave event [℃] or [K]. Default : '30 degC'
+    window : int
+      Minimum number of days with temperatures above thresholds to qualify as a heatwave.
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      Number of heatwave at the wanted frequency
+
+    Notes
+    -----
+    The thresholds of 22° and 25°C for night temperatures and 30° and 35°C for day temperatures were selected by
+    Health Canada professionals, following a temperature–mortality analysis. These absolute temperature thresholds
+    characterize the occurrence of hot weather events that can result in adverse health outcomes for Canadian
+    communities (Casati et al., 2013).
+
+    In Robinson (2001), the parameters would be `thresh_tasmin=27.22, thresh_tasmax=39.44, window=2` (81F, 103F).
+
+    References
+    ----------
+    Casati, B., A. Yagouti, and D. Chaumont, 2013: Regional Climate Projections of Extreme Heat Events in Nine Pilot
+    Canadian Communities for Public Health Planning. J. Appl. Meteor. Climatol., 52, 2669–2698,
+    https://doi.org/10.1175/JAMC-D-12-0341.1
+
+    Robinson, P.J., 2001: On the Definition of a Heat Wave. J. Appl. Meteor., 40, 762–775,
+    https://doi.org/10.1175/1520-0450(2001)040<0762:OTDOAH>2.0.CO;2
+    """
+    thresh_tasmax = convert_units_to(thresh_tasmax, tasmax)
+
+    cond = tasmax > thresh_tasmax
+    group = cond.resample(time=freq)
+    return group.map(rl.windowed_run_events, window=window, dim="time")
 
 
 @declare_units("days", tasmin="[temperature]", thresh="[temperature]")
 def tn_days_below(
     tasmin: xarray.DataArray, thresh: str = "-10.0 degC", freq: str = "YS"
 ):
-    r"""Number of days with tmin below a threshold in
+    r"""Number of days with tmin below a threshold
 
     Number of days where daily minimum temperature is below a threshold.
 
@@ -499,8 +766,8 @@ def tn_days_below(
 
         TX_{ij} < Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
-    f1 = utils.threshold_count(tasmin, "<", thresh, freq)
+    thresh = convert_units_to(thresh, tasmin)
+    f1 = threshold_count(tasmin, "<", thresh, freq)
     return f1
 
 
@@ -535,7 +802,7 @@ def tx_days_above(
 
         TX_{ij} > Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     f = (tasmax > thresh) * 1
     return f.resample(time=freq).sum(dim="time")
 
@@ -571,7 +838,7 @@ def warm_day_frequency(
         TN_{ij} > Threshold [℃]
 
     """
-    thresh = utils.convert_units_to(thresh, tasmax)
+    thresh = convert_units_to(thresh, tasmax)
     events = (tasmax > thresh) * 1
     return events.resample(time=freq).sum(dim="time")
 
@@ -598,7 +865,7 @@ def warm_night_frequency(
     xarray.DataArray
       The number of days with tasmin > thresh per period
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
+    thresh = convert_units_to(thresh, tasmin)
     events = (tasmin > thresh) * 1
     return events.resample(time=freq).sum(dim="time")
 
@@ -634,7 +901,7 @@ def wetdays(pr: xarray.DataArray, thresh: str = "1.0 mm/day", freq: str = "YS"):
     >>> pr = xr.open_dataset('pr.day.nc').pr
     >>> wd = xclim.indices.wetdays(pr, pr_min=5., freq="QS-DEC")
     """
-    thresh = utils.convert_units_to(thresh, pr, "hydro")
+    thresh = convert_units_to(thresh, pr, "hydro")
 
     wd = (pr >= thresh) * 1
     return wd.resample(time=freq).sum(dim="time")
@@ -677,10 +944,53 @@ def maximum_consecutive_dry_days(
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    t = utils.convert_units_to(thresh, pr, "hydro")
+    t = convert_units_to(thresh, pr, "hydro")
     group = (pr < t).resample(time=freq)
 
-    return group.apply(rl.longest_run, dim="time")
+    return group.map(rl.longest_run, dim="time")
+
+
+@declare_units("days", tasmin="[temperature]", thresh="[temperature]")
+def maximum_consecutive_frost_free_days(
+    tasmin: xarray.DataArray, thresh: str = "0 degC", freq: str = "YS"
+):
+    r"""Maximum number of consecutive frost free days (Tn > 0℃)
+
+    Return the maximum number of consecutive days within the period where the
+    minimum temperature is above a certain threshold.
+
+    Parameters
+    ----------
+    tasmin : xarray.DataArray
+      Max daily temperature [K]
+    thresh : str
+      Threshold temperature [K].
+    freq : str
+      Resampling frequency; Defaults to "YS".
+
+    Returns
+    -------
+    xarray.DataArray
+      The maximum number of consecutive frost free days.
+
+    Notes
+    -----
+    Let :math:`\mathbf{t}=t_0, t_1, \ldots, t_n` be a daily minimum temperature series and :math:`thresh` the threshold
+    above which a day is considered a frost free day. Let :math:`\mathbf{s}` be the sorted vector of indices :math:`i`
+    where :math:`[t_i < thresh] \neq [t_{i+1} < thresh]`, that is, the days when the temperature crosses the threshold.
+    Then the maximum number of consecutive frost free days is given by
+
+    .. math::
+
+       \max(\mathbf{d}) \quad \mathrm{where} \quad d_j = (s_j - s_{j-1}) [t_{s_j} > thresh]
+
+    where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
+    the start and end of the series, but the numerical algorithm does.
+    """
+    t = convert_units_to(thresh, tasmin)
+    group = (tasmin > t).resample(time=freq)
+
+    return group.map(rl.longest_run, dim="time")
 
 
 @declare_units("days", tasmax="[temperature]", thresh="[temperature]")
@@ -689,7 +999,8 @@ def maximum_consecutive_tx_days(
 ):
     r"""Maximum number of consecutive summer days (Tx > 25℃)
 
-    Return the maximum number of consecutive days within the period where temperature is above a certain threshold.
+    Return the maximum number of consecutive days within the period where
+    the maximum temperature is above a certain threshold.
 
     Parameters
     ----------
@@ -719,14 +1030,14 @@ def maximum_consecutive_tx_days(
     where :math:`[P]` is 1 if :math:`P` is true, and 0 if false. Note that this formula does not handle sequences at
     the start and end of the series, but the numerical algorithm does.
     """
-    t = utils.convert_units_to(thresh, tasmax)
+    t = convert_units_to(thresh, tasmax)
     group = (tasmax > t).resample(time=freq)
 
-    return group.apply(rl.longest_run, dim="time")
+    return group.map(rl.longest_run, dim="time")
 
 
 @declare_units("[area]", sic="[]", area="[area]", thresh="[]")
-def sea_ice_area(sic, area, thresh="15 pct"):
+def sea_ice_area(sic, area, thresh: str = "15 pct"):
     """Return the total sea ice area.
 
     Sea ice area measures the total sea ice covered area where sea ice concentration is above a threshold,
@@ -755,15 +1066,15 @@ def sea_ice_area(sic, area, thresh="15 pct"):
     <https://nsidc.org/arcticseaicenews/faq/#area_extent>`_
 
     """
-    t = utils.convert_units_to(thresh, sic)
-    factor = utils.convert_units_to("100 pct", sic)
+    t = convert_units_to(thresh, sic)
+    factor = convert_units_to("100 pct", sic)
     out = xarray.dot(sic.where(sic >= t, 0), area) / factor
     out.attrs["units"] = area.units
     return out
 
 
 @declare_units("[area]", sic="[]", area="[area]", thresh="[]")
-def sea_ice_extent(sic, area, thresh="15 pct"):
+def sea_ice_extent(sic, area, thresh: str = "15 pct"):
     """Return the total sea ice extent.
 
     Sea ice extent measures the *ice-covered* area, where a region is considered ice-covered if its sea ice
@@ -791,7 +1102,7 @@ def sea_ice_extent(sic, area, thresh="15 pct"):
     `What is the difference between sea ice area and extent
     <https://nsidc.org/arcticseaicenews/faq/#area_extent>`_
     """
-    t = utils.convert_units_to(thresh, sic)
+    t = convert_units_to(thresh, sic)
     out = xarray.dot(sic >= t, area)
     out.attrs["units"] = area.units
     return out
@@ -799,7 +1110,7 @@ def sea_ice_extent(sic, area, thresh="15 pct"):
 
 @declare_units("days", tasmin="[temperature]", thresh="[temperature]")
 def tropical_nights(
-    tasmin: xarray.DataArray, thresh: str = "20.0 degC", freq: str = "YS"
+    tasmin: xarray.DataArray, thresh: str = "20.0 degC", freq: str = "YS",
 ):
     r"""Tropical nights
 
@@ -828,7 +1139,7 @@ def tropical_nights(
 
         TN_{ij} > Threshold [℃]
     """
-    thresh = utils.convert_units_to(thresh, tasmin)
+    thresh = convert_units_to(thresh, tasmin)
     return (
         tasmin.pipe(lambda x: (tasmin > thresh) * 1).resample(time=freq).sum(dim="time")
     )
@@ -885,9 +1196,9 @@ def deep_freezethaw_cycles(
     .. math::
         \sum_i T_i - T_f > thresh\_thaw
     """
-    thresh_freeze = utils.convert_units_to(thresh_freeze, "K days")
-    thresh_thaw = utils.convert_units_to(thresh_thaw, "K days")
-    freezing_point = utils.convert_units_to(freezing_point, tas)
+    thresh_freeze = convert_units_to(thresh_freeze, "K days")
+    thresh_thaw = convert_units_to(thresh_thaw, "K days")
+    freezing_point = convert_units_to(freezing_point, tas)
 
     if (thresh_thaw < 0) or (thresh_freeze > 0):
         raise ValueError(
@@ -901,7 +1212,7 @@ def deep_freezethaw_cycles(
         # Find the places where the temperature crosses 0.
         over = np.ones_like(degdays)
         over[temp < freezing_point] = -1
-        cross = [0,] + np.nonzero(np.diff(over) != 0)[0].tolist()
+        cross = [0] + np.nonzero(np.diff(over) != 0)[0].tolist()
 
         cycles = [
             0.1,  # Start with positive to assure a freeze as first event
