@@ -29,6 +29,7 @@ __all__ = [
     "growing_season_end",
     "growing_season_length",
     "last_spring_frost",
+    "first_day_below",
     "heat_wave_index",
     "heating_degree_days",
     "hot_spell_frequency",
