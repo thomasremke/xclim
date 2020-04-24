@@ -289,9 +289,9 @@ def missing_wmo(da, freq, nm=11, nc=5, **indexer):
     r"""Return whether a series fails WMO criteria for missing days.
 
     The World Meteorological Organisation recommends that where monthly means are computed from daily values,
-    it should considered missing if either of these two criteria are met:
-      – observations are missing for 11 or more days during the month;
-      – observations are missing for a period of 5 or more consecutive days during the month.
+    it should be considered missing if either of these two criteria are met:
+      observations are missing for 11 or more days during the month;
+      observations are missing for a period of 5 or more consecutive days during the month.
 
     Stricter criteria are sometimes used in practice, with a tolerance of 5 missing values or 3 consecutive missing
     values.
