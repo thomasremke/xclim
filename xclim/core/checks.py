@@ -8,6 +8,7 @@ Functions performing basic health checks on xarray.DataArrays.
 import datetime as dt
 import logging
 from functools import wraps
+from typing import Optional
 from warnings import warn
 
 import numpy as np
@@ -263,12 +264,12 @@ class MissingPct(MissingBase):
         return n / count >= tolerance
 
 
-def missing_any(da, freq, **indexer):
+def missing_any(da: xr.DataArray, freq: str, **indexer: Optional[dict]):
     r"""Return whether there are missing days in the array.
 
     Parameters
     ----------
-    da : DataArray
+    da : xr.DataArray
       Input array at daily frequency.
     freq : str
       Resampling frequency.
@@ -285,20 +286,22 @@ def missing_any(da, freq, **indexer):
     return MissingAny(da, freq, **indexer)()
 
 
-def missing_wmo(da, freq, nm=11, nc=5, **indexer):
+def missing_wmo(
+    da: xr.DataArray, freq: str, nm: int = 11, nc: int = 5, **indexer: Optional[dict]
+):
     r"""Return whether a series fails WMO criteria for missing days.
 
     The World Meteorological Organisation recommends that where monthly means are computed from daily values,
-    it should be considered missing if either of these two criteria are met:
-      observations are missing for 11 or more days during the month;
-      observations are missing for a period of 5 or more consecutive days during the month.
+    it should be considered missing if either of these two criteria are met::
+        - observations are missing for 11 or more days during the month;
+        - observations are missing for a period of 5 or more consecutive days during the month.
 
     Stricter criteria are sometimes used in practice, with a tolerance of 5 missing values or 3 consecutive missing
     values.
 
     Parameters
     ----------
-    da : DataArray
+    da : xr.DataArray
       Input array at daily frequency.
     freq : str
       Resampling frequency.
@@ -320,7 +323,9 @@ def missing_wmo(da, freq, nm=11, nc=5, **indexer):
     return missing.resample(time=freq).any()
 
 
-def missing_pct(da, freq, tolerance, **indexer):
+def missing_pct(
+    da: xr.DataArray, freq: str, tolerance: float, **indexer: Optional[dict]
+):
     r"""Return whether there are more missing days in the array than a given percentage.
 
     Parameters

@@ -130,7 +130,7 @@ def parse_doc(doc):
 def merge_attributes(
     attribute: str,
     *inputs_list: Union[xr.DataArray, xr.Dataset],
-    new_line="\n",
+    new_line: str = "\n",
     missing_str: Optional[str] = None,
     **inputs_kws: Union[xr.DataArray, xr.Dataset],
 ):
@@ -142,7 +142,7 @@ def merge_attributes(
     ----------
     attribute : str
       The attribute to merge.
-    inputs_list : Union[xr.DataArray, xr.Dataset]
+    *inputs_list : Union[xr.DataArray, xr.Dataset]
       The datasets or variables that were used to produce the new object.
       Inputs given that way will be prefixed by their "name" attribute if available.
     new_line : str
